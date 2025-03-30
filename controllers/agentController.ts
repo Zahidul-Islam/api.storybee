@@ -315,8 +315,8 @@ const generateVideo = async (videoPrompt: string, fileName: string) => {
 
   let generation = await lumaClient.generations.video.create({
     prompt: videoPrompt,
-    // aspect_ratio: "9:16",
-    aspect_ratio: "16:9",
+    aspect_ratio: "9:16",
+    // aspect_ratio: "16:9",
     // loop: true,
   });
 
