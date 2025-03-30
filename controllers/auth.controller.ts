@@ -25,12 +25,14 @@ export const googleLogin = async (ctx: Context) => {
 };
 
 /**
- * @api {get} /auth/linkedin/callback Linkedin Callback
+ * @api {get} /auth/Google/callback Google Callback
  * @apiGroup Users
  * @access Public
  */
 export const googleCallback = async (c: Context) => {
   const code = c.req.query("code") || (await c.req.json()).code;
+
+  console.log("googleCallback : ", code);
 
   try {
     const {
@@ -46,6 +48,8 @@ export const googleCallback = async (c: Context) => {
 
     // 1) Check if user exists
     let user = (await User.findOne({ email })) as any;
+
+    console.log("googleCallback : ", user);
 
     if (!user) {
       // 2) Create new user
@@ -90,12 +94,12 @@ export const googleCallback = async (c: Context) => {
       200
     );
   } catch (err: any) {
-    console.error("linkedinCallback Error:", err);
+    console.error("Google Callback Error:", err);
     return c.json(
       {
         status: err?.status || 500,
         success: false,
-        message: err?.message || "LinkedIn callback failed",
+        message: err?.message || "Google callback failed",
       },
       err?.status || 500
     );

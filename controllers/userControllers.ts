@@ -1,6 +1,5 @@
-import { Context } from 'hono'
-import { User } from '../models'
-import { genToken } from '../utils'
+import { Context } from "hono";
+import { User } from "../models";
 
 /**
  * @api {get} /users Get All Users
@@ -8,88 +7,92 @@ import { genToken } from '../utils'
  * @access Private
  */
 export const getUsers = async (c: Context) => {
-  const users = await User.find()
-
-  return c.json({ users })
-}
-
-/**
- * @api {post} /users Create User
- * @apiGroup Users
- * @access Public
- */
-export const createUser = async (c: Context) => {
-  const { name, email, password } = await c.req.json()
-
-  // Check for existing user
-  const userExists = await User.findOne({ email })
-  if (userExists) {
-    c.status(400)
-    throw new Error('User already exists')
-  }
-
-  const user = await User.create({
-    name,
-    email,
-    password,
-  })
-
-  if (!user) {
-    c.status(400)
-    throw new Error('Invalid user data')
-  }
-
-  const token = await genToken(user._id.toString())
+  const users = await User.find();
 
   return c.json({
     success: true,
-    data: {
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      isAdmin: user.isAdmin,
-    },
-    token,
-    message: 'User created successfully',
-  })
-}
+    data: users,
+    message: "All users fetched successfully",
+  });
+};
 
 /**
- * @api {post} /users/login Login User
+ * @api {get} /users/:id Get User By Id
  * @apiGroup Users
- * @access Public
+ * @access Private
  */
-export const loginUser = async (c: Context) => {
-  const { email, password } = await c.req.json()
 
-  // Check for existing user
-  if (!email || !password) {
-    c.status(400)
-    throw new Error('Please provide an email and password')
+export const getUserById = async (ctx: Context | any) => {
+  const userId = await ctx.get("userId").toString();
+
+  const id = await ctx.req.param("id");
+
+  console.log("User ID: ", userId);
+  console.log("ID: ", id);
+
+  if (userId !== id) {
+    return ctx.status(401).json({
+      success: false,
+      message: "Unauthorized access to user account",
+    });
   }
 
-  const user = await User.findOne({ email })
-  if (!user) {
-    c.status(401)
-    throw new Error('No user found with this email')
-  }
+  try {
+    // const userProfile = await UserProfile.findOne({ createdBy: id });
+    const user = await User.findById(id);
 
-  if (!(await user.mathPassword(password))) {
-    c.status(401)
-    throw new Error('Invalid credentials')
-  } else {
-    const token = await genToken(user._id.toString())
+    if (!user) {
+      return ctx.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
 
-    return c.json({
+    if (!user.isActive) {
+      return ctx.status(403).json({
+        success: false,
+        message: "User account is disabled",
+      });
+    }
+
+    return ctx.json({
       success: true,
-      data: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-        isAdmin: user.isAdmin,
-      },
-      token,
-      message: 'User logged in successfully',
-    })
+      data: user,
+      message: "User profile fetched successfully",
+    });
+  } catch (error: any) {
+    return ctx.status(error.status).json({
+      success: false,
+      data: error,
+      message: "User not found",
+    });
   }
-}
+};
+
+/**
+ * @api {put} /users Update User
+ * @apiGroup Users
+ * @access Private
+ */
+export const updateUser = async (c: Context | any) => {
+  // const id = await c.req.param("id");
+
+  const userId = await c.get("userId");
+  const body = await c.req.json();
+
+  delete body.tokens;
+  delete body._id;
+  delete body.createdAt;
+  delete body.updatedAt;
+
+  const user = await User.findByIdAndUpdate(userId, body, {
+    new: true,
+    runValidators: true,
+  });
+
+  return c.json({
+    success: true,
+    data: user,
+    message: "User updated successfully",
+  });
+};

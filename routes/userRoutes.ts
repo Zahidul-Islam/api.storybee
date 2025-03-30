@@ -1,27 +1,19 @@
-import { Hono } from 'hono'
-import { user } from '../controllers'
-import { isAdmin, protect } from '../middlewares'
+import { Hono } from "hono";
+import { userController } from "../controllers";
+import { isAdmin, protect } from "../middlewares";
 
-const users = new Hono()
+const users = new Hono();
 
 // Get All Users
-users.get('/', protect, isAdmin, (c) => user.getUsers(c))
-
-// Create User
-users.post('/', (c) => user.createUser(c))
-
-// Login User
-users.post('/login', (c) => user.loginUser(c))
+users.get("/", protect, isAdmin, (c) => userController.getUsers(c));
 
 // Get Single User
-users.get('/:id', (c) => {
-  const id = c.req.param('id')
-  return c.json({ message: `User ${id}` })
-})
+users.get("/:id", protect, (c) => userController.getUserById(c));
 
-// Get User Profile
-users.get('/profile', (c) => {
-  return c.json({ message: 'User Profile' })
-})
+// Update User
+users.put("/:id", protect, (c) => userController.updateUser(c));
 
-export default users
+// Update User
+users.put("/:id/profile", protect, (c) => userController.updateUserProfile(c));
+
+export default users;

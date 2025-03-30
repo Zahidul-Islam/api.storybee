@@ -14,6 +14,8 @@ import {
   getStorytellingPromptForTitle,
   getVideoGenerationPromptFromScript,
 } from "../utils/prompts";
+import uploadToS3 from "../components/uploadToS3";
+import { Video } from "../models";
 
 const lumaClient = new LumaAI({
   authToken: process.env.LUMA_API_KEY,
@@ -453,157 +455,332 @@ const getVideoGenerationPrompt = async (script: string) => {
 };
 
 /**
- * @api {get} /users Get All Users
+ * @api {post} /
  * @apiGroup Users
  * @access Private
  */
 export const generateVideoScript = async (ctx: Context) => {
-  const body = await ctx.req.json();
+  const userId = await ctx.get("userId");
+  const url = new URL(ctx.req.url);
+  const topic = url.searchParams.get("topic");
 
-  console.log("==> body", body);
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (step, message) => {
+        controller.enqueue(`data: ${JSON.stringify({ step, message })}\n\n`);
+      };
 
-  const { object } = await generateObject({
-    model: openai("gpt-4o-mini"),
-    schema: z.object({
-      hook: z.string(),
-      intro: z.string(),
-      body: z.string(),
-      conclusion: z.string(),
-      call_to_action: z.string(),
-    }),
-    prompt: getStorytellingPromptForTitle(body.topic),
+      send("start", "Started video generation");
+
+      const { object } = await generateObject({
+        model: openai("gpt-4o-mini"),
+        schema: z.object({
+          hook: z.string(),
+          intro: z.string(),
+          body: z.string(),
+          conclusion: z.string(),
+          call_to_action: z.string(),
+        }),
+        prompt: getStorytellingPromptForTitle(topic),
+      });
+      send("script", "Generated storytelling script");
+
+      const prompts = {
+        hook: await getVideoGenerationPrompt(object.hook),
+        intro: await getVideoGenerationPrompt(object.intro),
+        body: await getVideoGenerationPrompt(object.body),
+        conclusion: await getVideoGenerationPrompt(object.conclusion),
+        call_to_action: await getVideoGenerationPrompt(object.call_to_action),
+      };
+      send("prompts", "Created video prompts");
+
+      const tasks = [
+        ["hook", prompts.hook, object.hook],
+        ["intro", prompts.intro, object.intro],
+        ["body", prompts.body, object.body],
+        ["conclusion", prompts.conclusion, object.conclusion],
+        ["call_to_action", prompts.call_to_action, object.call_to_action],
+      ];
+
+      for (const [key, prompt, text] of tasks) {
+        await generateVideo(prompt, `${filePath}${key}.mp4`);
+        await generateAudio(text, `${filePath}${key}.mp3`);
+        send(key, `Generated ${key} video and audio`);
+        await processMedia(
+          `${filePath}${key}.mp4`,
+          `${filePath}${key}.mp3`,
+          `${filePath}final_${key}_output.mp4`
+        );
+        send(`${key}_processed`, `Processed ${key} media`);
+      }
+
+      send("merging", "Merging video parts");
+      await mergeVideosReencode(filePath);
+      const outputPath = `${filePath}final_output.mp4`;
+      const audioPath = `${filePath}final_output.mp3`;
+
+      await extractAudio(outputPath, audioPath);
+      send("audio_extracted", "Extracted audio");
+
+      await transcribeAudioToSRT(audioPath, `${filePath}final_output.srt`);
+      send("transcribed", "Transcribed audio to SRT");
+
+      await addSubtitlesToVideo(
+        outputPath,
+        `${filePath}final_output.srt`,
+        `${filePath}final_output_with_subtitles.mp4`
+      );
+      send("subtitles_added", "Added subtitles");
+
+      const finalVideoPath = `${filePath}final_output_with_subtitles.mp4`;
+
+      const upload = await uploadToS3({
+        filePath: finalVideoPath,
+        name: "final_output_with_subtitles.mp4",
+        userId: userId,
+      });
+      send("uploaded", "Uploaded final video to S3");
+
+      const video = await Video.create({
+        createdBy: userId,
+        videoType: "video",
+        userId,
+        title: topic,
+        url: upload.url,
+      });
+
+      send("done", "Video generation complete");
+      controller.enqueue(`event: end\ndata: done\n\n`);
+      controller.close();
+    },
   });
-  console.log("==> ", object);
 
-  const videoHookPrompt = await getVideoGenerationPrompt(object.hook);
-
-  console.log("==> Hook: ", videoHookPrompt);
-
-  const videoIntroPrompt = await getVideoGenerationPrompt(object.intro);
-
-  console.log("==> Intro: ", videoIntroPrompt);
-
-  const videoBodyPrompt = await getVideoGenerationPrompt(object.body);
-
-  console.log("==> Body: ", videoBodyPrompt);
-
-  const videoConclusionPrompt = await getVideoGenerationPrompt(
-    object.conclusion
-  );
-
-  console.log("==> Conclusion: ", videoConclusionPrompt);
-
-  const videoCallToActionPrompt = await getVideoGenerationPrompt(
-    object.call_to_action
-  );
-
-  console.log("==> Call to action: ", videoCallToActionPrompt);
-
-  await Promise.all([
-    await generateVideo(videoHookPrompt, filePath + "hook.mp4"),
-    await generateVideo(videoIntroPrompt, filePath + "intro.mp4"),
-    await generateVideo(videoBodyPrompt, filePath + "body.mp4"),
-    await generateVideo(videoConclusionPrompt, filePath + "conclusion.mp4"),
-    await generateVideo(
-      videoCallToActionPrompt,
-      filePath + "call_to_action.mp4"
-    ),
-    await generateAudio(object.hook, filePath + "hook.mp3"),
-    await generateAudio(object.intro, filePath + "intro.mp3"),
-    await generateAudio(object.body, filePath + "body.mp3"),
-    await generateAudio(object.conclusion, filePath + "conclusion.mp3"),
-    await generateAudio(object.call_to_action, filePath + "call_to_action.mp3"),
-  ]);
-
-  console.log("==> Done generating videos and audio");
-
-  console.log("==> Processing hook files...");
-  await processMedia(
-    `${filePath}hook.mp4`,
-    `${filePath}hook.mp3`,
-    `${filePath}final_hook_output.mp4`
-  )
-    .then(() => console.log("Processing complete!"))
-    .catch(console.error);
-
-  console.log("==> Processing intro files...");
-  await processMedia(
-    `${filePath}intro.mp4`,
-    `${filePath}intro.mp3`,
-    `${filePath}final_intro_output.mp4`
-  )
-    .then(() => console.log("Processing complete!"))
-    .catch(console.error);
-
-  console.log("==> Processing body files...");
-  await processMedia(
-    `${filePath}body.mp4`,
-    `${filePath}body.mp3`,
-    `${filePath}final_body_output.mp4`
-  )
-    .then(() => console.log("Processing complete!"))
-    .catch(console.error);
-
-  console.log("==> Processing conclusion files...");
-  await processMedia(
-    `${filePath}conclusion.mp4`,
-    `${filePath}conclusion.mp3`,
-    `${filePath}final_conclusion_output.mp4`
-  )
-    .then(() => console.log("Processing complete!"))
-    .catch(console.error);
-
-  console.log("==> Processing cta files...");
-  await processMedia(
-    `${filePath}call_to_action.mp4`,
-    `${filePath}call_to_action.mp3`,
-    `${filePath}final_call_to_action_output.mp4`
-  )
-    .then(() => console.log("Processing complete!"))
-    .catch(console.error);
-
-  console.log("==> Merging videos and audio");
-
-  await mergeVideosReencode(filePath);
-
-  console.log("=========> Merging videos and audio done");
-  const outputPath = `${filePath}final_output.mp4`;
-  const audioPath = `${filePath}final_output.mp3`;
-
-  const audioFilePath = await extractAudio(outputPath, audioPath);
-
-  console.log("==> Generating srt files");
-  await transcribeAudioToSRT(audioPath, `${filePath}final_output.srt`);
-
-  await addSubtitlesToVideo(
-    outputPath,
-    `${filePath}final_output.srt`,
-    `${filePath}final_output_with_subtitles.mp4`
-  );
-  console.log("==> Merging video and audio");
-  // const script = await generateScript(body.topic);
-  // console.log("==> script", script);
-
-  // const imageUrl = await generateImage(script.story);
-  // console.log("==> imageUrl", imageUrl);
-
-  // //   const visualKeywords = await generateVisualKeywords(script!);
-  // //   console.log("==> visualKeywords", visualKeywords);
-
-  // await generateVideo(script.chapters[0].storyline, filePath + "video.mp4");
-  // //   console.log("==> videoUrl", videoUrl);
-
-  // await generateAudio(script.chapters[0].storyline, filePath + "audio.mp3");
-
-  // const videoUrl = await generateVideo(script.chapters[0].storyline, imageUrl!);
-  // console.log("==> videoUrl", videoUrl);
-
-  // await saveVideo(videoUrl!, filePath + "video.mp4");
-  //   if (!body.topic) {
-  //     return ctx.json({ error: "Topic is required" }, 400);
-  //   }
-  //   console.log("Generating video...");
-
-  //   return ctx.json({ status: "success", script, visualKeywords: [] });
-  return ctx.json({ status: "success" });
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    },
+  });
 };
+
+/**
+ * @api {get} /users Get All Users
+ * @apiGroup Users
+ * @access Private
+ */
+export const getAllVideos = async (ctx: Context) => {
+  const userId = await ctx.get("userId");
+
+  try {
+    const videos = await Video.find({ createdBy: userId }).sort({
+      createdAt: -1,
+    });
+
+    if (!videos) {
+      return ctx.json({ error: "No videos found" }, 404);
+    }
+
+    return ctx.json({ status: 200, success: true, data: videos }, 200);
+  } catch (error) {
+    console.error("Error fetching videos:", error);
+    return ctx.json({ error: "Failed to fetch videos" }, 500);
+  }
+};
+
+/**
+ * @api {get} /users/:id Get User by ID
+ * @apiGroup Users
+ * @access Private
+ */
+export const getVideoById = async (ctx: Context) => {
+  const userId = await ctx.get("userId");
+  const { id } = ctx.req.param();
+
+  try {
+    const video = await Video.findOne({ _id: id, createdBy: userId });
+
+    if (!video) {
+      return ctx.json({ error: "Video not found" }, 404);
+    }
+
+    console.log("==> video", video);
+
+    return ctx.json({ status: 200, success: true, data: video }, 200);
+  } catch (error) {
+    console.error("Error fetching video:", error);
+    return ctx.json({ error: "Failed to fetch video" }, 500);
+  }
+};
+
+// export const generateVideoScript = async (ctx: Context) => {
+//   const userId = await ctx.get("userId");
+//   const body = await ctx.req.json();
+
+//   console.log("==> body", body);
+//   console.log("==> userId", userId);
+
+//   const { object } = await generateObject({
+//     model: openai("gpt-4o-mini"),
+//     schema: z.object({
+//       hook: z.string(),
+//       intro: z.string(),
+//       body: z.string(),
+//       conclusion: z.string(),
+//       call_to_action: z.string(),
+//     }),
+//     prompt: getStorytellingPromptForTitle(body.topic),
+//   });
+//   console.log("==> ", object);
+
+//   const videoHookPrompt = await getVideoGenerationPrompt(object.hook);
+
+//   console.log("==> Hook: ", videoHookPrompt);
+
+//   const videoIntroPrompt = await getVideoGenerationPrompt(object.intro);
+
+//   console.log("==> Intro: ", videoIntroPrompt);
+
+//   const videoBodyPrompt = await getVideoGenerationPrompt(object.body);
+
+//   console.log("==> Body: ", videoBodyPrompt);
+
+//   const videoConclusionPrompt = await getVideoGenerationPrompt(
+//     object.conclusion
+//   );
+
+//   console.log("==> Conclusion: ", videoConclusionPrompt);
+
+//   const videoCallToActionPrompt = await getVideoGenerationPrompt(
+//     object.call_to_action
+//   );
+
+//   console.log("==> Call to action: ", videoCallToActionPrompt);
+
+//   await Promise.all([
+//     await generateVideo(videoHookPrompt, filePath + "hook.mp4"),
+//     await generateVideo(videoIntroPrompt, filePath + "intro.mp4"),
+//     await generateVideo(videoBodyPrompt, filePath + "body.mp4"),
+//     await generateVideo(videoConclusionPrompt, filePath + "conclusion.mp4"),
+//     await generateVideo(
+//       videoCallToActionPrompt,
+//       filePath + "call_to_action.mp4"
+//     ),
+//     await generateAudio(object.hook, filePath + "hook.mp3"),
+//     await generateAudio(object.intro, filePath + "intro.mp3"),
+//     await generateAudio(object.body, filePath + "body.mp3"),
+//     await generateAudio(object.conclusion, filePath + "conclusion.mp3"),
+//     await generateAudio(object.call_to_action, filePath + "call_to_action.mp3"),
+//   ]);
+
+//   console.log("==> Done generating videos and audio");
+
+//   console.log("==> Processing hook files...");
+//   await processMedia(
+//     `${filePath}hook.mp4`,
+//     `${filePath}hook.mp3`,
+//     `${filePath}final_hook_output.mp4`
+//   )
+//     .then(() => console.log("Processing complete!"))
+//     .catch(console.error);
+
+//   console.log("==> Processing intro files...");
+//   await processMedia(
+//     `${filePath}intro.mp4`,
+//     `${filePath}intro.mp3`,
+//     `${filePath}final_intro_output.mp4`
+//   )
+//     .then(() => console.log("Processing complete!"))
+//     .catch(console.error);
+
+//   console.log("==> Processing body files...");
+//   await processMedia(
+//     `${filePath}body.mp4`,
+//     `${filePath}body.mp3`,
+//     `${filePath}final_body_output.mp4`
+//   )
+//     .then(() => console.log("Processing complete!"))
+//     .catch(console.error);
+
+//   console.log("==> Processing conclusion files...");
+//   await processMedia(
+//     `${filePath}conclusion.mp4`,
+//     `${filePath}conclusion.mp3`,
+//     `${filePath}final_conclusion_output.mp4`
+//   )
+//     .then(() => console.log("Processing complete!"))
+//     .catch(console.error);
+
+//   console.log("==> Processing cta files...");
+//   await processMedia(
+//     `${filePath}call_to_action.mp4`,
+//     `${filePath}call_to_action.mp3`,
+//     `${filePath}final_call_to_action_output.mp4`
+//   )
+//     .then(() => console.log("Processing complete!"))
+//     .catch(console.error);
+
+//   console.log("==> Merging videos and audio");
+
+//   await mergeVideosReencode(filePath);
+
+//   console.log("=========> Merging videos and audio done");
+//   const outputPath = `${filePath}final_output.mp4`;
+//   const audioPath = `${filePath}final_output.mp3`;
+
+//   const audioFilePath = await extractAudio(outputPath, audioPath);
+
+//   console.log("==> Generating srt files");
+//   await transcribeAudioToSRT(audioPath, `${filePath}final_output.srt`);
+
+//   await addSubtitlesToVideo(
+//     outputPath,
+//     `${filePath}final_output.srt`,
+//     `${filePath}final_output_with_subtitles.mp4`
+//   );
+//   console.log("==> Merging video and audio");
+
+//   const finalVideoPath = `${filePath}final_output_with_subtitles.mp4`;
+
+//   const { url } = await uploadToS3({
+//     filePath: finalVideoPath,
+//     name: "final_output_with_subtitles.mp4",
+//     userId: userId,
+//   });
+
+//   console.log("==> Uploaded video to S3", url);
+
+//   const video = await Video.create({
+//     createdBy: userId,
+//     videoType: "video",
+//     userId,
+//     title: body.topic,
+//     url: url,
+//   });
+
+//   // const script = await generateScript(body.topic);
+//   // console.log("==> script", script);
+
+//   // const imageUrl = await generateImage(script.story);
+//   // console.log("==> imageUrl", imageUrl);
+
+//   // //   const visualKeywords = await generateVisualKeywords(script!);
+//   // //   console.log("==> visualKeywords", visualKeywords);
+
+//   // await generateVideo(script.chapters[0].storyline, filePath + "video.mp4");
+//   // //   console.log("==> videoUrl", videoUrl);
+
+//   // await generateAudio(script.chapters[0].storyline, filePath + "audio.mp3");
+
+//   // const videoUrl = await generateVideo(script.chapters[0].storyline, imageUrl!);
+//   // console.log("==> videoUrl", videoUrl);
+
+//   // await saveVideo(videoUrl!, filePath + "video.mp4");
+//   //   if (!body.topic) {
+//   //     return ctx.json({ error: "Topic is required" }, 400);
+//   //   }
+//   //   console.log("Generating video...");
+
+//   //   return ctx.json({ status: "success", script, visualKeywords: [] });
+//   return ctx.json({ status: 200, success: true, data: video }, 200);
+// };
