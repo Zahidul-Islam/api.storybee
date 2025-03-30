@@ -34,8 +34,12 @@ const uploadToS3 = async ({
     const fileSize = fileStats.size;
 
     const mimeType = mime.lookup(name) || "application/octet-stream";
+
+    const rendomeString = Math.random().toString(36).substring(2, 15);
+
     const s3Path =
-      folder || `${process.env.NODE_ENV}/linkedin/${userId}/videos/${name}`;
+      folder ||
+      `${process.env.NODE_ENV}/linkedin/${userId}/videos/${rendomeString}/${name}`;
 
     const s3file: S3File = client.file(s3Path);
     await Bun.write(s3file, file);
