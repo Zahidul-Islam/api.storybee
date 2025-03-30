@@ -573,7 +573,8 @@ export const getAllVideos = async (ctx: Context) => {
   const userId = await ctx.get("userId");
 
   try {
-    const videos = await Video.find({ createdBy: userId }).sort({
+    // const videos = await Video.find({ createdBy: userId }).sort({
+    const videos = await Video.find().sort({
       createdAt: -1,
     });
 
@@ -598,7 +599,7 @@ export const getVideoById = async (ctx: Context) => {
   const { id } = ctx.req.param();
 
   try {
-    const video = await Video.findOne({ _id: id, createdBy: userId });
+    const video = await Video.findOne({ _id: id });
 
     if (!video) {
       return ctx.json({ error: "Video not found" }, 404);
