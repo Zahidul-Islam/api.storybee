@@ -315,7 +315,8 @@ const generateVideo = async (videoPrompt: string, fileName: string) => {
 
   let generation = await lumaClient.generations.video.create({
     prompt: videoPrompt,
-    aspect_ratio: "9:16",
+    // aspect_ratio: "9:16",
+    aspect_ratio: "16:9",
     // loop: true,
   });
 
@@ -462,7 +463,11 @@ const getVideoGenerationPrompt = async (script: string) => {
 export const generateVideoScript = async (ctx: Context) => {
   const userId = await ctx.get("userId");
   const url = new URL(ctx.req.url);
-  const topic = url.searchParams.get("topic");
+
+  const body = await ctx.req.json();
+
+  // const topic = url.searchParams.get("topic");
+  const topic = body.topic;
 
   const stream = new ReadableStream({
     async start(controller) {
